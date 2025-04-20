@@ -90,7 +90,7 @@ def create_module_conf(module_name: str, project_ini_path: Path, mode: str) -> t
     conf_path = module_dir / "conf.ini"
 
     conf = configparser.ConfigParser()
-    conf['MODULE'] = {
+    conf['Config'] = {
         'module_name': module_name,
         'mode': mode,
         'project_ini_path': str(project_ini_path)
