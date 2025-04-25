@@ -87,13 +87,20 @@ def create_module_conf(module_name: str, project_ini_path: Path, mode: str) -> t
         tuple[Path, configparser.ConfigParser]: A tuple containing the resolved path to the created configuration file and the config object.
     """
     module_dir = Path(__file__).resolve().parent
-    conf_path = module_dir / "conf.ini"
+    conf_path = module_dir / "Vidconf.ini"
 
     conf = configparser.ConfigParser()
     conf['Config'] = {
         'module_name': module_name,
         'mode': mode,
         'project_ini_path': str(project_ini_path)
+    }
+    conf['Directories'] = {
+        'MOV_SOURCE_DIR': "Modules/QBMS_TSG/GameFiles/USRDIR/Assets_1_Video_Movies",
+        'MOV_TARGET_DIR': "Modules/Video/GameFiles/Assets_1_Video_Movies"
+    }
+    conf['Tools'] = {
+        'ffmpeg_path': "ffmpeg.exe"
     }
 
     with open(conf_path, 'w') as f:
@@ -103,7 +110,12 @@ def create_module_conf(module_name: str, project_ini_path: Path, mode: str) -> t
     return conf_path.resolve(), conf
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Main function to initialize the Video module."""
     logging.basicConfig(level=logging.INFO)
     project_ini, mode = find_or_create_project_ini()
     create_module_conf(module_name="Video", project_ini_path=project_ini, mode=mode)
+
+if __name__ == "__main__":
+    main()
+
