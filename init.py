@@ -96,7 +96,7 @@ def create_module_conf(module_name: str, project_ini_path: Path, mode: str) -> t
         'project_ini_path': str(project_ini_path)
     }
     conf['Directories'] = {
-        'MOV_SOURCE_DIR': "Modules/QBMS_TSG/GameFiles/USRDIR/Assets_1_Video_Movies",
+        'MOV_SOURCE_DIR': "Modules/Extract/GameFiles/USRDIR/Assets_1_Video_Movies",
         'MOV_TARGET_DIR': "Modules/Video/GameFiles/Assets_1_Video_Movies"
     }
     conf['Tools'] = {
