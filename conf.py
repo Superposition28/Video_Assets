@@ -7,16 +7,7 @@ try:
     # Assuming printer module is in the same parent directory or installed
     from .printer import print, print_error, print_verbose, print_debug, colours
 except ImportError:
-    # Fallback if running standalone or printer is in the same directory
-    try:
-        from printer import print, print_error, print_verbose, print_debug, colours
-    except ImportError:
-        # Basic fallback if printer module is not found
-        print("Warning: Custom printer module not found. Using standard print.")
-        colours = type('obj', (object,), {'YELLOW': '', 'CYAN': '', 'GREEN': '', 'RED': ''})() # Dummy colours
-        def print_error(*args): print("ERROR:", *args)
-        def print_verbose(*args): print("VERBOSE:", *args)
-        def print_debug(*args): print("DEBUG:", *args)
+	from printer import print, print_error, print_verbose, print_debug, colours
 
 
 import os
