@@ -1,126 +1,186 @@
-import os
 import subprocess
 import sys
-import configparser
 import platform
+import json # Keep json for potential future use, though not strictly needed for reading passed dict
 from pathlib import Path
-
-# --- Configuration ---
-global MOV_SOURCE_DIR, MOV_TARGET_DIR
-CONFIG_FILE_PATH = r"Vidconf.ini"
-# --- End Configuration ---
-
-def read_config(file_path: str) -> str:
-    """Reads and displays the contents of a configuration file."""
-    config = configparser.ConfigParser()
-
-    configPath = Path(__file__).resolve().parent / "..\\..\\" / file_path
-    print(f"Config file path: {configPath}")
-    config.read(configPath)
-
-    print(f"Config file contents: {config.sections()}")
-
-    global MOV_SOURCE_DIR, MOV_TARGET_DIR
-
-    MOV_SOURCE_DIR = config.get('Directories', 'MOV_SOURCE_DIR')
-    MOV_TARGET_DIR = config.get('Directories', 'MOV_TARGET_DIR')
-
-    ffmpeg_path = config.get('Tools', 'ffmpeg_path')
-
-    return ffmpeg_path
+from typing import Dict, Any, Optional
+try:
+    from ....printer import print, print_error, print_verbose, print_debug, colours
+except ImportError:
+    from printer import print, print_error, print_verbose, print_debug, colours
 
 
-def main():
-    """Main script logic."""
-    # Get FFmpeg path
-    ffmpeg_path = read_config(CONFIG_FILE_PATH)
+def find_ffmpeg(config_path: str, project_dir: Path, module_dir: Path) -> Optional[str]:
+    """
+    Tries to locate the ffmpeg executable based on the config path.
+    Checks:
+    1. If it's an absolute path.
+    2. If it's relative to the project directory.
+    3. If it's relative to the module directory.
+    4. If it's just an executable name in the system PATH.
 
-    global MOV_SOURCE_DIR, MOV_TARGET_DIR
+    Args:
+        config_path (str): The path string from the configuration file.
+        project_dir (Path): The absolute path to the project directory.
+        module_dir (Path): The absolute path to the current module directory.
 
-    if not os.path.isdir(MOV_SOURCE_DIR):
-        print(f"Error: Source directory not found: {MOV_SOURCE_DIR}", file=sys.stderr)
-        sys.exit(1)
+    Returns:
+        Optional[str]: The resolved path to the ffmpeg executable or the name itself
+                       if found in PATH, None otherwise.
+    """
+    ffmpeg_p = Path(config_path)
 
+    # 1. Check if it's already absolute
+    if ffmpeg_p.is_absolute():
+        if ffmpeg_p.is_file():
+            print_verbose(f"FFmpeg path is absolute: {ffmpeg_p}")
+            return str(ffmpeg_p)
+        else:
+            print_warning(f"Absolute FFmpeg path specified but not found: {ffmpeg_p}")
+            # Continue searching other possibilities
 
-    # Ensure ffmpeg path exists or is in PATH
+    # 2. Check relative to project directory
+    proj_relative_path = project_dir / ffmpeg_p
+    if proj_relative_path.is_file():
+        print_verbose(f"Found FFmpeg relative to project dir: {proj_relative_path}")
+        return str(proj_relative_path.resolve())
+
+    # 3. Check relative to module directory
+    mod_relative_path = module_dir / ffmpeg_p
+    if mod_relative_path.is_file():
+        print_verbose(f"Found FFmpeg relative to module dir: {mod_relative_path}")
+        return str(mod_relative_path.resolve())
+
+    # 4. Assume it's in PATH and verify
+    print_verbose(f"Checking if '{config_path}' is in system PATH...")
     try:
-        # Check if it's an absolute/relative path first
-        if os.path.sep in ffmpeg_path and not os.path.exists(ffmpeg_path):
-            raise FileNotFoundError
-        # If not a path with separator, try running `ffmpeg -version` to check if it's in PATH
-        elif os.path.sep not in ffmpeg_path:
-            subprocess.run([ffmpeg_path, "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(f"Using FFmpeg found at: {ffmpeg_path}")
-    except (FileNotFoundError, subprocess.CalledProcessError, OSError) as e:
-        print(f"Error: FFmpeg executable not found or not runnable at: {ffmpeg_path}. Error: {e}", file=sys.stderr)
+        # Use 'where' on Windows or 'which' on Unix-like systems
+        cmd = ["where", config_path] if platform.system() == "Windows" else ["which", config_path]
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        found_path = result.stdout.strip().splitlines()[0] # Take the first result if multiple
+        print_verbose(f"Found FFmpeg in PATH: {found_path}")
+        # Return the original name, as subprocess can often find it via PATH
+        return config_path
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print_warning(f"'{config_path}' not found as absolute, relative, or in system PATH.")
+        return None
+
+
+def main(project_dir: Path, module_dir: Path, config: Dict[str, Any]):
+    """
+    Main video conversion logic using paths from the provided config dictionary.
+
+    Args:
+        project_dir (Path): Absolute path to the project's root directory.
+        module_dir (Path): Absolute path to the Video module's directory.
+        config (Dict[str, Any]): The 'Video' section dictionary from project.json.
+    """
+    print(colours.CYAN, "--- Starting Video Conversion Process ---")
+    print_verbose(f"Project Directory: {project_dir}")
+    print_verbose(f"Module Directory: {module_dir}")
+    # print_debug(f"Received Config: {json.dumps(config, indent=2)}") # Uncomment for deep debug
+
+    # --- Get Configuration Values ---
+    try:
+        source_dir_rel = config['Directories']['MOV_SOURCE_DIR']
+        target_dir_rel = config['Directories']['MOV_TARGET_DIR']
+        ffmpeg_path_str = config['Tools']['ffmpeg_path']
+    except KeyError as e:
+        print_error(f"Missing configuration key in 'Video' section of project.json: {e}")
         sys.exit(1)
 
+    # --- Resolve Paths ---
+    source_dir = (project_dir / source_dir_rel).resolve()
+    target_dir = (project_dir / target_dir_rel).resolve()
 
-    # Find all .vp6 files recursively
-    vp6_files = []
-    for root, _, files in os.walk(MOV_SOURCE_DIR):
-        for file in files:
-            if file.lower().endswith(".vp6"):
-                vp6_files.append(os.path.join(root, file))
+    print_verbose(f"Resolved Source Directory: {source_dir}")
+    print_verbose(f"Resolved Target Directory: {target_dir}")
+
+    if not source_dir.is_dir():
+        print_error(f"Source directory not found: {source_dir}")
+        sys.exit(1)
+
+    # --- Locate FFmpeg ---
+    ffmpeg_executable = find_ffmpeg(ffmpeg_path_str, project_dir, module_dir)
+    if not ffmpeg_executable:
+        print_error(f"FFmpeg executable could not be located based on config value: '{ffmpeg_path_str}'")
+        sys.exit(1)
+    print(colours.CYAN, f"Using FFmpeg: {ffmpeg_executable}")
+
+
+    # --- Find and Process Files ---
+    # Use pathlib's rglob for recursive search
+    vp6_files = list(source_dir.rglob("*.vp6"))
 
     if not vp6_files:
-        print("No .vp6 files found in source directory.")
+        print(colours.YELLOW, "No .vp6 files found in source directory.")
+        print(colours.CYAN, "--- Video Conversion Process Finished (No files) ---")
         return
 
+    print(colours.CYAN, f"Found {len(vp6_files)} .vp6 files of the 172 expected files.")
+
+    conversion_errors = 0
     # Iterate through each .vp6 file
     for file_path in vp6_files:
         try:
-            # Calculate relative path
-            mov_relative_path = os.path.relpath(file_path, MOV_SOURCE_DIR)
-            mov_target_path = os.path.join(MOV_TARGET_DIR, mov_relative_path)
+            # Calculate relative path within source_dir for structuring target
+            relative_path = file_path.relative_to(source_dir)
+            target_path_base = target_dir / relative_path.parent / file_path.stem # Target dir + subdirs + filename without ext
+            ogv_file = target_path_base.with_suffix(".ogv") # Add .ogv suffix
 
             # Ensure target directory exists
-            target_directory = os.path.dirname(mov_target_path)
-            if not os.path.exists(target_directory):
-                print(f"Creating directory: {target_directory}")
-                os.makedirs(target_directory, exist_ok=True)
-
-            # Set target filename with .ogv extension
-            base, _ = os.path.splitext(mov_target_path)
-            ogv_file = base + ".ogv"
+            ogv_file.parent.mkdir(parents=True, exist_ok=True) # Creates parent dirs as needed
 
             # Check if output file already exists
-            if os.path.exists(ogv_file):
-                print(f"Skipping conversion for '{file_path}' as '{ogv_file}' already exists.")
+            if ogv_file.exists():
+                print(colours.YELLOW, f"Skipping: Output '{ogv_file.name}' already exists.")
                 continue
 
             # Print conversion message
-            print(f"Converting '{file_path}' to '{ogv_file}'")
+            print(colours.CYAN, f"Converting '{file_path.name}' -> '{ogv_file.name}'")
+            print_verbose(f"  Source: {file_path}")
+            print_verbose(f"  Target: {ogv_file}")
 
             # Run ffmpeg command
             cmd = [
-                ffmpeg_path,
-                "-y",  # Overwrite output files without asking
-                "-i", file_path,
-                "-c:v", "libtheora",
-                "-q:v", "7",
-                "-c:a", "libvorbis",
-                "-q:a", "5",
-                ogv_file
+                ffmpeg_executable,
+                "-y",  # Overwrite output files without asking (redundant due to check above, but safe)
+                "-i", str(file_path), # Input file
+                "-c:v", "libtheora",  # Video codec
+                "-q:v", "10",          # Video quality (0-10 for Theora, higher is better)
+                "-c:a", "libvorbis",  # Audio codec
+                "-q:a", "10",          # Audio quality (0-10 for Vorbis, higher is better)
+                str(ogv_file)         # Output file
             ]
-            # Use shell=True on Windows if ffmpeg_path might contain spaces and isn't quoted
-            use_shell = platform.system() == "Windows"
+            print_debug(f"Running command: {' '.join(cmd)}")
+
             # Run the command and let its output go directly to the console
-            result = subprocess.run(cmd, check=False, shell=use_shell) # Removed capture_output=True, text=True
+            # No shell=True needed if ffmpeg_executable is properly resolved/quoted internally by subprocess
+            result = subprocess.run(cmd, check=False) # check=False allows us to inspect returncode
 
             if result.returncode == 0:
-                print(f"Conversion completed: {ogv_file}")
+                print(colours.GREEN, f"  Success: Conversion completed for {ogv_file.name}")
             else:
-                # Error message is printed, FFmpeg's own error output would have already been printed to stderr
-                print(f"Error converting '{file_path}' to '{ogv_file}'. FFmpeg returned error code {result.returncode}.", file=sys.stderr)
-                # Decide if you want to exit on first error or continue
-                sys.exit(1) # Uncomment to exit on first error
+                conversion_errors += 1
+                print_error(f"  Error converting '{file_path.name}'. FFmpeg returned code {result.returncode}.")
+                # FFmpeg's detailed error output should have gone to stderr already
+                # Optional: Exit on first error
+                # print_error("Exiting due to conversion error.")
+                # sys.exit(1)
 
         except Exception as e:
-            print(f"An unexpected error occurred processing '{file_path}': {e}", file=sys.stderr)
-            # Decide if you want to exit on first error or continue
-            sys.exit(1) # Uncomment to exit on first error
+            conversion_errors += 1
+            print_error(f"An unexpected error occurred processing '{file_path.name}': {e}")
+            # Optional: Exit on first error
+            # print_error("Exiting due to unexpected error.")
+            # sys.exit(1)
 
-if __name__ == "__main__":
-    main()
-    print("Script finished.")
+    # --- Final Summary ---
+    print(colours.CYAN, "--- Video Conversion Process Finished ---")
+    if conversion_errors > 0:
+        print(colours.RED, f"{conversion_errors} error(s) occurred during conversion.")
+    else:
+        print(colours.GREEN, "All conversions completed successfully (or were skipped).")
+
+# Note: Removed the `if __name__ == "__main__":` block as this script
+# is intended to be called as a function by the main run script.
